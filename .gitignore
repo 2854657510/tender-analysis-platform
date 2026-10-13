@@ -1,0 +1,42 @@
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 编辑器 ----
+.vscode/
+.idea/
+*.swp
+
+# ---- 环境与密钥（重要）----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# ---- ★ 项目2 专属：数据和模型文件 ----
+data/*
+!data/.gitkeep
+*.pdf
+*.docx
+*.xlsx
+
+# 向量库落盘文件（体积大，且是派生产物，不该进版本控制）
+chroma/
+*.sqlite3
+*.db
+
+# 模型缓存（动辄几个 GB）
+.cache/
+models/

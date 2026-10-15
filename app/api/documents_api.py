@@ -1,39 +1,74 @@
-"""文档接口 —— D12 任务（但 D2 就会开始用到）。
+import logging
+from pathlib import Path
 
-【三个接口】
-    POST   /api/documents/upload   上传 PDF 并入库
-    GET    /api/documents          列出已上传的文档
-    DELETE /api/documents/{name}   删除文档（同时清向量库）
-
-【上传的完整流程】（这是 D2 的核心验收）
-    上传文件 → 存到 data/ → parse_pdf 解析 → split_pages 切分
-    → add_chunks 写向量库 → upsert_document 记录到 SQLite
-"""
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+
+from app import db
+from app.config import settings
+from modules.parsing import chunker, pdf_parser
+from modules.retrieval import vector_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 单份 PDF 允许的最大体积（MB）。
+MAX_PDF_MB = 50
+
+
+def _process_pdf(path: Path) -> dict:
+   # 解析 + 切分 + 入库（同步阻塞版）。
+
+    source = path.name
+
+    pages = pdf_parser.parse_pdf(path)
+    if not pages:
+        raise ValueError("解析结果为空：可能是扫描件（图片型 PDF），需要走 OCR")
+
+    chunks = chunker.split_pages(pages)
+    vector_store.delete_by_source(source)
+    vector_store.add_chunks(chunks, source=source)
+
+    db.upsert_document(source, len(pages), len(chunks), status="done")
+
+    return {"file_name": source, "page_count": len(pages), "chunk_count": len(chunks)}
 
 
 @router.post("/documents/upload", tags=["documents"])
 async def upload_document(file: UploadFile = File(...)):
-    """上传 PDF 并完成解析入库。
+   # 上传 PDF 并完成解析入库。
+    filename = file.filename or ""
+    if not filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="只支持 PDF 文件")
 
-    实现步骤：
-        1. 校验后缀是 .pdf
-        2. 存到 settings.data_dir / file.filename
-        3. pages  = pdf_parser.parse_pdf(path)
-        4. chunks = chunker.split_pages(pages)
-        5. vector_store.delete_by_source(file.filename)   # 先删旧的，防重复
-           vector_store.add_chunks(chunks, source=file.filename)
-        6. db.upsert_document(file.filename, len(pages), len(chunks), "done")
-        7. 返回 {"file_name":..., "page_count":..., "chunk_count":...}
+    # 取纯文件名，防路径穿越。
+    safe_name = Path(filename).name
+    if not safe_name:
+        raise HTTPException(status_code=400, detail="文件名不合法")
 
-    ★ 异常处理：解析失败时要写 db.upsert_document(..., status="failed", error=str(e))，
-      不要把整个接口搞崩 —— 批量上传时一份坏文件不该拖垮全部。
+    content = await file.read()
 
-    D12 验收：上传一份 PDF，能看到页数和 chunk 数
-    """
-    raise NotImplementedError("D12 任务：实现文档上传")
+    # ② 体积校验
+    if len(content) > MAX_PDF_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"文件超过 {MAX_PDF_MB}MB 上限")
+    if not content:
+        raise HTTPException(status_code=400, detail="文件是空的")
+
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    dest = settings.data_dir / safe_name
+    dest.write_bytes(content)
+
+    # ③ 丢进线程池执行。
+    try:
+        result = await run_in_threadpool(_process_pdf, dest)
+    except Exception as e:
+        logger.exception("上传处理失败：%s", safe_name)
+        # ★ 失败也要留痕：前端列表里能显示"failed + 原因"，
+        db.upsert_document(safe_name, 0, 0, status="failed", error=str(e)[:500])
+        raise HTTPException(status_code=500, detail=f"处理失败：{e}")
+
+    return result
 
 
 @router.get("/documents", tags=["documents"])
@@ -46,9 +81,21 @@ async def list_documents():
 
 @router.delete("/documents/{file_name}", tags=["documents"])
 async def delete_document(file_name: str):
-    """删除文档：向量库 + SQLite 都要清。
+    # 删除文档：向量库 + SQLite 都要清。
+    # ★ 同样要防路径穿越：这个参数直接来自 URL，用户可以随便构造
+    safe_name = Path(file_name).name
 
-    ★ 容易漏的地方：只删了 SQLite 记录，向量库里的 chunk 还在，
-      检索时还会召回已删除文档的内容 —— 这是经典的"删不干净"bug。
-    """
-    raise NotImplementedError("D12 任务：实现文档删除")
+    # ① 先删向量库再删 SQLite 记录。
+    deleted_chunks = await run_in_threadpool(vector_store.delete_by_source, safe_name)
+
+    # ② 再删 SQLite 记录
+    db.delete_document(safe_name)
+
+    # ③ 顺手删掉磁盘上的原始文件。missing_ok=True：
+    try:
+        (settings.data_dir / safe_name).unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("原始文件删除失败（不影响检索）：%s", e)
+
+    logger.info("已删除文档 %s（清掉 %s 条 chunk）", safe_name, deleted_chunks)
+    return {"file_name": safe_name, "deleted_chunks": deleted_chunks}

@@ -1,15 +1,4 @@
-"""开工前自检 + 进度追踪。
 
-用法：
-    cd "C:\\Users\\Firebat\\Desktop\\tender-analysis-platform"
-    conda activate langchain1.2
-    $env:PYTHONIOENCODING="utf-8"
-    python scripts/check_env.py
-
-【为什么需要它】
-1. 每次开工前跑一次，5 秒确认环境没问题（项目1踩过的坑这里一次性排掉）
-2. 它能扫描出哪些模块还是 NotImplementedError —— 相当于进度条
-"""
 import importlib
 import sys
 from pathlib import Path
@@ -106,7 +95,10 @@ for rel, day, name in TODO_UNITS:
         todo.append((day, name, "文件不存在"))
         continue
     text = p.read_text(encoding="utf-8")
-    n = text.count("NotImplementedError")
+    # ★ 只数 "raise NotImplementedError"，不是裸的 "NotImplementedError"。
+    #   否则文档注释里提一句"这个方法会抛 NotImplementedError"就会被误判成待实现
+    #   —— ocr.py 就因为这个误报过（它在注释里记录了 paddle 的报错信息）。
+    n = text.count("raise NotImplementedError")
     (todo if n else done).append((day, name, n))
 
 for day, name, n in todo:

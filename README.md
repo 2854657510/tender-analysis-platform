@@ -6,31 +6,17 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.135-green)]()
 [![LangGraph](https://img.shields.io/badge/LangGraph-orange)]()
 
-> 🚧 **开发中** —— 按 15 天计划推进，进度见下方「开发进度」
+
 
 ---
 
 ## 解决什么问题
 
 一份标书几十上百页，想找"这个项目的资格要求是什么"，只能 Ctrl+F 或者从头翻。
-多家标书横向对比更是灾难 —— 人工做一次要半天。
 
 **这个平台把标书变成可检索的知识库**：
 - 用 RAG 做精准问答，答案带出处，可点回原文
 - 复杂的对比分析交给 Agent 拆解成多步自动完成
-
-## 和上一个项目的关系
-
-本项目是 [ai-agent-portfolio](https://github.com/2854657510/ai-agent-portfolio) 的延续，不是重做：
-
-```
-ai-agent-portfolio                 tender-analysis-platform
-─────────────────────             ─────────────────────────────
-结构化抽取服务              ──→    作为「抽取工具」被复用
-SSE 流式接口                ──→    作为「回答生成」的输出方式
-FastAPI + Pydantic          ──→    后端架构继续沿用
-Streamlit 前端              ──→    扩成多页面
-```
 
 **那个项目解决了"单篇文档转结构化"，但处理不了跨文档检索** ——
 这就是本项目引入 RAG 的原因。
@@ -64,7 +50,7 @@ Streamlit 前端              ──→    扩成多页面
 
 ## 技术栈
 
-| 层 | 选型 | 为什么（面试会问） |
+| 层 | 选型 | 为什么 |
 |---|---|---|
 | 后端 | FastAPI + Pydantic | 自动文档、类型安全、原生 async |
 | 文档解析 | PyMuPDF（+ PaddleOCR） | 快且纯 Python；扫描件走 OCR |
@@ -81,9 +67,8 @@ Streamlit 前端              ──→    扩成多页面
 ## 快速开始
 
 ```bash
-# 1. 建环境
-conda create -n agent15 python=3.11 -y
-conda activate agent15
+# 1. 环境（本机用的是 langchain1.2 这个 conda 环境）
+conda activate langchain1.2
 pip install -r requirements.txt
 
 # 2. 配密钥
@@ -137,28 +122,26 @@ tender-analysis-platform/
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| **D1** | PDF 解析 + 切分 | ⬜ |
-| **D2** | OCR + Embedding + 向量库入库 | ⬜ |
-| **D3** | 最小 RAG 链路 | ⬜ |
-| **D4** | 混合检索（向量 + BM25 + RRF） | ⬜ |
-| **D5** | Rerank + Query Rewrite | ⬜ |
-| **D6** | 手写 Agent 循环 | ⬜ |
-| **D7** | LangGraph 编排 | ⬜ |
-| **D8** | MCP Server | ⬜ |
+| **D1** | PDF 解析 + 切分 | ✅ |
+| **D2** | OCR + Embedding + 向量库入库 | ✅ |
+| **D3** | 最小 RAG 链路 | ✅ |
+| **D4** | 混合检索（向量 + BM25 + RRF） | ✅ |
+| **D5** | Rerank + Query Rewrite | ✅ |
+| **D6** | 手写 Agent 循环 | ✅ |
+| **D7** | LangGraph 编排 | ✅ |
+| **D8** | MCP Server | ✅ |
 | **D9** | Dify 低代码对照 | ⬜ |
 | **D10** | 评测体系 | ⬜ |
-| **D11** | Memory + 缓存 + 限流 | ⬜ |
-| **D12** | 前端整合 | ⬜ |
+| **D11** | Memory + 缓存 + 限流 | 
+| **D12** | 前端整合 | ✅ |
 | **D13** | Docker 部署 | ⬜ |
 
 跑 `python scripts/check_env.py` 可以看到实时的实现进度。
 
 ## 已知限制
 
-- OCR 未实现时只支持文本型 PDF
-- Rerank 在低配机器上可能降级为"不重排"
-- 未做鉴权与限流，公网部署前必须补上
+- Rerank 走的是"一次调用给所有候选打分"，模型偶发失败时**自动降级为不重排**（有日志），不会让接口报错
+- 缓存和限流都是**进程内**实现：`uvicorn --workers 2` 时每个 worker 各算各的，生产要换 Redis
+- OCR 已实现（PaddleOCR 3.x），但单份文档默认最多 OCR 50 页（`modules/parsing/ocr.py` 里的 `MAX_OCR_PAGES`）
 
----
 
-*开发计划见 `项目2-智能标书分析平台-15天作战计划.md`*

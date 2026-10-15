@@ -1,11 +1,4 @@
-"""首页 —— D12 任务。
 
-启动：
-    streamlit run frontend/app.py
-
-【Streamlit 多页面约定】pages/ 目录下的 .py 文件会自动出现在侧边栏导航里，
-文件名前缀的数字决定顺序（1_ 在最前）。
-"""
 import streamlit as st
 
 import api_client
@@ -23,8 +16,14 @@ with st.sidebar:
         st.error("🔴 连不上后端")
         st.caption("另开一个终端运行：\n`uvicorn app.main:app --reload`")
 
+    # ★★ 存进 session_state，pages/ 下的三个子页面才能拿到【用户填的这个地址】。
+    #    子页面里写的是 st.session_state.get("base_url", 默认值) ——
+    #    不存的话它们永远只会用默认的 127.0.0.1:8000，
+    #    用户在后端部署到服务器后就怎么都连不上了。
+    st.session_state["base_url"] = base_url
+
 st.title("📑 智能标书分析平台")
-st.caption("上传标书 → 建立知识库 → 自然语言问答 → Agent 自动分析")
+st.caption("基于 RAG 技术，帮助用户快速分析和对比多个标书。")
 
 st.markdown("""
 ### 怎么用
@@ -40,11 +39,8 @@ st.markdown("""
 ### 这个项目在做什么
 
 **痛点**：一份标书几十上百页，想找"这个项目的资格要求是什么"，
-只能 Ctrl+F 或者从头翻。多家标书对比更是灾难。
+只能 Ctrl+F 或者从头翻。
 
 **方案**：把标书变成可检索的知识库，用 RAG 做精准问答；
 复杂的对比分析交给 Agent 拆解执行。
-
-**和项目1的关系**：项目1做了单篇文档的结构化抽取，
-但处理不了"跨文档检索"——这就是本项目引入 RAG 的原因。
 """)

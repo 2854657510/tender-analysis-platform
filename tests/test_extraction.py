@@ -1,12 +1,4 @@
-"""抽取逻辑的单元测试（从项目1复制过来，import 路径已调整）。
 
-【新建文件 2026-09-29】
-【为什么这些测试值钱】它们用【假客户端】跑，不花一分钱 API 费用，
-但把 4 条关键路径全锁住了。面试时说"我给失败路径写了测试"，比说"我跑通了"有分量得多。
-
-跑法：
-    pytest -v
-"""
 import pytest
 
 import modules.extraction.extract as extract_module

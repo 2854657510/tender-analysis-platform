@@ -1,9 +1,4 @@
 
-"""抽取结果的契约 —— 从 ai-agent-portfolio 复用。
-
-【说明】只保留了 Contact 和 TenderNotice。
-原项目里的 Request / Response 是那个项目自己的接口模型，这里不需要。
-"""
 from pydantic import BaseModel, Field
 
 # 请求

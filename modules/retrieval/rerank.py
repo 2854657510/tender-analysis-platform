@@ -1,19 +1,55 @@
-"""Rerank 重排 —— D5 任务 ★ 效果提升最明显的一步。
 
-【要做什么】召回 20 条 → 精排出最相关的 5 条。
+import json
+import logging
 
-【为什么需要】这是"召回率"和"准确率"的权衡：
-    向量检索是【粗筛】：快，但只保证"相关的在里面"，不保证"排在最前面"
-    Rerank 是【精排】：慢，但能准确判断"问题 和 文档"的深层相关度
-    → 所以流程是"粗筛多召回一些，再精排挑出最好的"
-
-【两种实现，按资源选】
-    A. 本地模型：BAAI/bge-reranker-base（效果好，但要下模型、占内存）
-    B. API 方案：用大模型给"问题-文档"对打分（简单，但慢且费 token）
-
-    ★ 先用 B 跑通，再考虑换 A。别一上来就卡在装模型上。
-"""
 from app.config import settings
+from modules.llm.client import chat
+
+logger = logging.getLogger(__name__)
+
+# 每条候选喂给模型时最多截取多少字。
+MAX_DOC_CHARS = 300
+
+RERANK_PROMPT = """你是一个检索结果相关性评分助手。
+用户问题：{query}
+
+下面是若干候选文档片段，请给每一个片段打一个 0-10 的相关度分数：
+- 10 分：直接回答了问题
+- 5 分：部分相关，能提供背景信息
+- 0 分：完全无关
+
+只输出 JSON，格式为 {{"scores": [{{"id": 1, "score": 8}}, ...]}}，不要任何解释。
+
+候选片段：
+{documents}"""
+
+
+def _score_with_llm(query: str, hits: list[dict]) -> dict[int, float]:
+    """调一次模型，拿到 {文档序号: 分数}。
+    """
+    lines = []
+    for i, hit in enumerate(hits, start=1):
+        snippet = " ".join(hit["text"][:MAX_DOC_CHARS].split())
+        lines.append(f"[{i}] {snippet}")
+
+    prompt = RERANK_PROMPT.format(query=query, documents="\n".join(lines))
+    # json_mode=True → 强制模型输出合法 JSON
+    raw = chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=1024)
+    data = json.loads(raw)
+
+    #  兼容两种常见的返回形态：
+    #   ① {"scores": [{"id": 1, "score": 8}, ...]}
+    #   ② [{"id": 1, "score": 8}, ...]
+    rows = data.get("scores", []) if isinstance(data, dict) else data
+
+    scores = {}
+    for row in rows:
+        try:
+            scores[int(row["id"])] = float(row["score"])
+        except (KeyError, TypeError, ValueError):
+            # 单条解析失败就跳过，不影响其它条目
+            continue
+    return scores
 
 
 def rerank(query: str, hits: list[dict], top_k: int | None = None) -> list[dict]:
@@ -22,16 +58,26 @@ def rerank(query: str, hits: list[dict], top_k: int | None = None) -> list[dict]
     输入：hybrid.search() 的输出（20 条左右）
     输出：精排后的 top_k 条，每项加一个 "rerank_score" 字段
 
-    实现提示（API 方案）：
-        对每个 hit，构造 prompt 让模型打 0-10 分：
-            "问题：{query}\n文档：{hit['text']}\n这段文档和问题的相关度打几分（0-10）？只输出数字。"
-        然后按分数降序。
-
-    ★ 降级兜底：Rerank 服务挂了【不能整个崩】，要能退回 RRF 的顺序。
-      写个 try/except，失败时直接返回原顺序 —— 这是工程细节，面试能讲。
-
-    D5 验收：
-        · Rerank 后 Top5 的相关性明显好于 RRF 直接取 Top5
-        · Rerank 失败时能降级，不抛异常
+    降级兜底：Rerank 服务挂了【不能整个崩】，要能退回 RRF 的顺序。
+    写个 try/except，失败时直接返回原顺序
     """
-    raise NotImplementedError("D5 任务：实现 Rerank 重排")
+    top_k = top_k or settings.rerank_top_k
+
+    if not hits:
+        return []
+
+    try:
+        scores = _score_with_llm(query, hits)
+
+        for i, hit in enumerate(hits, start=1):
+            # 模型漏掉的条目用一个很低的分数兜住，
+            hit["rerank_score"] = scores.get(i, -1.0)
+
+        ordered = sorted(hits, key=lambda h: h["rerank_score"], reverse=True)
+        logger.info("Rerank 完成：%s 条 → 取前 %s 条", len(ordered), top_k)
+        return ordered[:top_k]
+
+    except Exception as e:
+        # 降级路径：任何异常（网络、限流、模型输出不是 JSON）都在这里被接住。
+        logger.warning("Rerank 失败，降级为原顺序：%s: %s", type(e).__name__, e)
+        return hits[:top_k]

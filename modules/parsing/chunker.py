@@ -1,19 +1,4 @@
-"""文本切分（chunking）—— D1 任务。
 
-【要做什么】把长文本切成一个个 chunk，每个 chunk 记住它来自第几页。
-
-【为什么必须切分】模型上下文窗口装不下整份标书；
-而且检索的最小单位就是 chunk —— **chunk 的质量直接决定 RAG 的上限**。
-
-【三种切分策略，你要能说出选了哪种、为什么】
-    ① 固定长度切分    —— 简单粗暴，会在句子中间断开
-    ② 递归切分        —— 按"段落 → 句子 → 词"的优先级切，尽量保持语义完整（推荐）
-    ③ 语义切分        —— 用 Embedding 判断语义边界，最准但最慢最贵
-
-【关键参数】两个都要你调出来：
-    chunk_size    每个 chunk 多大
-    chunk_overlap 相邻 chunk 重叠多少（防止答案正好落在切口上被切断）
-"""
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings

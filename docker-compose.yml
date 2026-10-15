@@ -1,0 +1,91 @@
+
+services:
+  # ---------------------------------------------------------------------------
+  # 后端：FastAPI + RAG + Agent
+  # ---------------------------------------------------------------------------
+  api:
+    build: .
+    # ★ 给镜像起个固定名字，下面 web 服务直接复用这个镜像，
+    #   不用再构建一遍（否则 torch 那 1G 要装两次）。
+    image: tender-platform:latest
+    container_name: tender-api
+
+    # ★ 端口映射：宿主机 8000 → 容器 8000。
+    #   左边写 0.0.0.0:8000 或不写主机 IP 都可以；
+    #   但如果只想本机访问（不暴露公网），可以写 "127.0.0.1:8000:8000"。
+    ports:
+      - "8000:8000"
+
+    # ★★ 密钥从 .env 注入，【不要】写死在 compose 文件里 ——
+    #    compose 文件是要进版本库的，写死就等于把 key 公开了。
+    env_file:
+      - .env
+
+    environment:
+      # ★ 让它加载【镜像里内置的模型目录】，而不是去网上拉。
+      #   这台服务器连不上 huggingface/hf-mirror，运行时下载必然失败。
+      #   config.py 里 embedding_model 支持被环境变量覆盖，
+      #   所以本地开发用模型 ID、服务器用本地路径，改这一行就够。
+      - EMBEDDING_MODEL=/app/models/bge-small-zh-v1.5
+
+      # ★ 双保险：万一有别的代码路径去访问 HF，直接走离线模式，
+      #   避免又卡在「检查更新」的超时重试上（就是本地踩过的那个坑）。
+      - HF_HUB_OFFLINE=1
+
+    # ★★ 数据持久化，这一条不能省：
+    #   向量库（data/chroma）、SQLite（data/documents.db）、上传的 PDF 都在 data/ 下。
+    #   不挂 volume 的话，容器一重建（--build、换镜像、docker compose down）
+    #   这些数据全部消失 —— 用户上传的文档和建好的索引都没了。
+    volumes:
+      - ./data:/app/data
+
+    # ★ 服务器重启 / 容器崩溃后自动拉起（除非是你手动 docker stop 的）
+    restart: unless-stopped
+
+    # ★ 健康检查：让编排系统知道「这个容器是真的能干活了」，
+    #   而不是「进程起来了但还在加载模型」。
+    #   start_period 给 60 秒 —— 冷启动要加载 BGE 模型 + 建数据库表。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # 前端：Streamlit 三页面
+  # ---------------------------------------------------------------------------
+  web:
+    # ★ 不写 build，直接复用 api 构建出来的镜像（同一个镜像，不同启动命令）
+    image: tender-platform:latest
+    container_name: tender-web
+
+    # ★ 等后端【健康】之后再启动，而不是「容器起来之后」。
+    #   service_healthy 比 service_started 严格：后者只等进程启动，
+    #   此时后端可能还在加载模型，前端第一个请求就会失败。
+    depends_on:
+      api:
+        condition: service_healthy
+
+    # ★ 覆盖镜像里默认的 uvicorn 命令，改成跑 Streamlit。
+    #   --server.address=0.0.0.0 和后面 uvicorn 的 --host 0.0.0.0 是同一个道理：
+    #   不绑 0.0.0.0 的话容器外访问不到。
+    command:
+      - streamlit
+      - run
+      - frontend/app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      # ★★ 这一行是【前端容器能找到后端容器】的关键。
+      #    容器之间不能靠 localhost 互相访问（那是各自的内部回环地址），
+      #    要用 compose 自动建的内部 DNS —— 服务名 api 就是主机名。
+      #    写错成 127.0.0.1:8000 的话，前端会一直提示「连不上后端」，
+      #    但你在宿主机上用 curl 测后端又是通的，很容易查错方向。
+      - BACKEND_URL=http://api:8000
+
+    restart: unless-stopped

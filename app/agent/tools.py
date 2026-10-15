@@ -1,21 +1,10 @@
-"""Agent 工具定义 —— D6 任务。
+import logging
 
-【要做什么】定义 Agent 能调用的工具，并实现每个工具的执行逻辑。
-
-【工具设计的关键】工具的 description 是【写给模型看的】。
-模型靠它判断"什么时候该用这个工具" —— description 写得含糊，模型就选错工具。
-这和项目1里 Field 的 description 是同一个道理。
-"""
 from modules.extraction import extract as extraction
 from modules.retrieval import hybrid
 
-
-# ---------------------------------------------------------------------------
-# 工具定义（发给模型的 JSON Schema）
-#
-# ★ 格式必须严格符合 Function Calling 规范，字段一个都不能少：
-#     type / function.name / function.description / function.parameters
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
+# 格式必须严格符合 Function Calling 规范，字段一个都不能少：
 TOOLS = [
     {
         "type": "function",
@@ -73,10 +62,6 @@ TOOLS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# 工具的执行实现
-# ---------------------------------------------------------------------------
-
 def search_documents(query: str, top_k: int = 5) -> dict:
     """执行检索工具。"""
     hits = hybrid.search(query, top_k=top_k)
@@ -84,21 +69,46 @@ def search_documents(query: str, top_k: int = 5) -> dict:
 
 
 def extract_fields(document: str) -> dict:
-    """执行抽取工具 —— 直接复用项目1的能力。
-
-    ★ 这是两个项目真正连起来的地方：D8 之后它还会被封装成 MCP 工具。
-    """
+    # 执行抽取工具
     return extraction.extract_safe(document)
 
 
 def compare_budgets(projects: list[str]) -> dict:
-    """执行预算对比工具。
+    # 执行预算对比工具。
+    rows = []
 
-    实现提示：
-        1. 对每个项目名调 search_documents，找到它的预算
-        2. 排序返回
-    """
-    raise NotImplementedError("D6 任务：实现预算对比工具")
+    for name in projects:
+        row = {"project": name, "budget_wan": None, "source": None, "page": None}
+
+        try:
+            # ① 先检索这个项目的相关原文
+            hits = hybrid.search(name, top_k=3)
+
+            if hits:
+                row["source"] = hits[0].get("source")
+                row["page"] = hits[0].get("page")
+
+                # ② 把前几条原文拼起来交给抽取器。
+                merged = "\n".join(h["text"] for h in hits)
+
+                # ③ 复用项目1 的抽取能力，并走它的降级路径
+                extracted = extraction.extract_safe(merged)
+                row["budget_wan"] = extracted.get("budget_wan")
+
+        except Exception as e:
+            # 单个项目失败不中断整体
+            logger.warning("项目「%s」预算提取失败：%s", name, e)
+
+        rows.append(row)
+
+    #排序：有钱的排前面、按金额从高到低；没查到预算的沉到最后。
+    rows.sort(key=lambda r: (r["budget_wan"] is None, -(r["budget_wan"] or 0)))
+
+    return {
+        "comparison": rows,
+        "count": len(rows),
+        "note": "budget_wan 为 null 表示在所上传文档中未找到该项目预算",
+    }
 
 
 # 工具名 → 执行函数的映射。Agent 循环靠它把模型的"我要调用 X"变成真的函数调用。

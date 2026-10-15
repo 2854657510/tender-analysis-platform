@@ -1,20 +1,10 @@
-"""查询改写 —— D5 任务。
 
-【要做什么】把用户的口语化问题，改写成更容易被检索到的形式。
+import json
+import logging
 
-【为什么需要】用户的问法和文档的写法往往对不上：
-    用户问："这个项目要多少钱？"
-    文档写："招标控制价：1850 万元"
-    → 字面重叠很低，检索容易漏
-
-【三种常见手段】
-    ① 同义扩展     —— 把口语词换成领域术语（要多少钱 → 预算金额/招标控制价）
-    ② HyDE         —— 先让模型"编"一个假答案，再用假答案去检索（答案和文档更像）
-    ③ 多查询扩展    —— 生成 3 个不同角度的问法，分别检索后合并
-
-    ★ D5 时间有限的话，先做 ①，性价比最高。
-"""
 from modules.llm.client import chat
+
+logger = logging.getLogger(__name__)
 
 REWRITE_PROMPT = """你是一个检索优化助手。把用户的问题改写成更适合在招投标文档中检索的形式。
 
@@ -38,7 +28,27 @@ def rewrite(question: str) -> str:
     ★ 注意：改写【可能失败或跑偏】。如果改写后的结果和原问题差异过大，
       要考虑退回用原问题检索 —— 别让改写把检索带沟里。
     """
-    raise NotImplementedError("D5 任务：实现查询改写")
+    try:
+        prompt = REWRITE_PROMPT.format(question=question)
+
+        # ★ temperature=0：改写是"加工"不是"创作"，要的是稳定、可复现，
+        #   同一个问题每次都该改写出差不多的结果
+        rewritten = chat([{"role": "user", "content": prompt}], temperature=0.0).strip()
+
+        # ★ 长度检查：模型有时会"太热心"，把问题扩写成一段话，
+        #   或者干脆把规则也复述一遍。超过原问题 3 倍就认为跑偏了，退回原问题。
+        if not rewritten or len(rewritten) > len(question) * 3:
+            logger.warning("改写结果异常（长度 %s → %s），退回原问题", len(question), len(rewritten))
+            return question
+
+        logger.info("查询改写：%s → %s", question, rewritten)
+        return rewritten
+
+    except Exception as e:
+        # ★ 降级：改写只是"提速手段"，不是必需品。
+        #   挂了就用原问题检索 —— 效果差点，但功能不能断。
+        logger.warning("查询改写失败，使用原问题：%s", e)
+        return question
 
 
 def multi_query(question: str, n: int = 3) -> list[str]:
@@ -46,4 +56,27 @@ def multi_query(question: str, n: int = 3) -> list[str]:
 
     用途：分别检索后合并结果，提高召回率。
     """
-    raise NotImplementedError("D5 任务（可选）：多查询扩展")
+    prompt = f"""请从不同角度把下面的问题改写成 {n} 个不同的检索问法，用于在招投标文档中检索。
+
+要求：
+1. 每个问法侧重点不同（比如分别从金额、时间、资格要求、联系方式等角度切入）
+2. 保持原问题的核心意图不变
+3. 只输出 JSON 数组，格式为 ["问法1", "问法2", "问法3"]，不要任何解释
+
+原问题：{question}"""
+
+    try:
+        raw = chat([{"role": "user", "content": prompt}], json_mode=True, max_tokens=512)
+        data = json.loads(raw)
+
+        # 兼容 {"queries": [...]} 和直接给数组两种形态
+        queries = data.get("queries", []) if isinstance(data, dict) else data
+        queries = [q.strip() for q in queries if isinstance(q, str) and q.strip()]
+
+        # ★ 一定要把【原问题】也放进列表：改写出来的问法再合理，
+        #   也是"二手"的；原问题才是最忠实的意图表达。
+        return [question] + queries[:n]
+
+    except Exception as e:
+        logger.warning("多查询扩展失败，只用原问题：%s", e)
+        return [question]

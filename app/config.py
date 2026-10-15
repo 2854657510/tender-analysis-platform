@@ -1,14 +1,10 @@
-"""全局配置。
 
-【来源】从 ai-agent-portfolio 复制，并扩展了 RAG 相关配置项。
-原来那两个坑已经修好，直接沿用：
-  ① env_file 用【绝对路径】—— 否则从别的目录运行就读不到 .env，
-     会掉回默认值，报出看起来像网络问题的 APIConnectionError
-  ② base_url 默认值是真的 URL，不是字段名
-"""
+import os
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 

@@ -1,12 +1,4 @@
-"""PDF 解析 —— D1 任务。
 
-【要做什么】把 PDF 文件变成带页码的纯文本。
-
-【为什么页码重要】RAG 的回答要能标出处（"见第 3 页"）。
-如果解析时丢掉页码，后面就永远补不回来了 —— 这是不可逆的信息损失。
-
-【依赖】pip install pymupdf
-"""
 from pathlib import Path
 
 import pymupdf

@@ -1,14 +1,8 @@
-"""前端接口调用层 —— 所有网络请求都收在这里。
 
-【设计原则】前端不 import 后端的任何代码，只通过 HTTP 调用。
-    好处：后端挂了前端照样能启动，只提示"连不上后端"；两者可分开部署。
-
-【从项目1复制】后端地址读环境变量的做法沿用：
-    本地不设 BACKEND_URL（用默认值），Docker 里由 compose 注入 http://api:8000
-"""
 import json
 import os
 from typing import Iterator
+from urllib.parse import quote
 
 import requests
 
@@ -40,12 +34,45 @@ def check_health(base_url: str, timeout: int = 5) -> bool:
 def upload_document(base_url: str, file_bytes: bytes, file_name: str, timeout: int = 300) -> dict:
     """上传 PDF。
 
-    实现提示：
-        files = {"file": (file_name, file_bytes, "application/pdf")}
-        r = requests.post(f"{base_url}/api/documents/upload", files=files, timeout=timeout)
-    ★ timeout 要设大一点 —— 解析 + Embedding 很慢，默认 5 秒必超时。
+    ★ timeout 要设大一点（默认 5 分钟）—— 解析 + Embedding 很慢，
+      requests 默认没有超时上限的话会一直挂着，而设成 5 秒又必然超时。
     """
-    raise NotImplementedError("D12 任务：实现文件上传")
+    # ★ multipart 上传的标准写法：{"字段名": (文件名, 字节流, MIME类型)}
+    #   后端 FastAPI 那边的参数名是 file，这里必须对得上。
+    files = {"file": (file_name, file_bytes, "application/pdf")}
+
+    try:
+        r = requests.post(
+            f"{base_url.rstrip('/')}/api/documents/upload", files=files, timeout=timeout
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise BackendDown(str(e)) from e
+
+    if r.status_code != 200:
+        # ★ 把后端的 detail 尽量带出来 —— 用户最需要知道的是"为什么失败"
+        #   （是扫描件？超体积？），而不是一个干巴巴的 500。
+        try:
+            detail = r.json().get("detail", r.text[:300])
+        except Exception:
+            detail = r.text[:300]
+        raise BackendError(r.status_code, detail)
+
+    return r.json()
+
+
+def delete_document(base_url: str, file_name: str, timeout: int = 60) -> dict:
+    """删除一份文档（后端会同时清向量库和 SQLite）。"""
+    try:
+        # ★ 文件名里有中文和空格，要 quote 转义，
+        #   直接拼进 URL 会 400 或者匹配不到路由。
+        r = requests.delete(
+            f"{base_url.rstrip('/')}/api/documents/{quote(file_name, safe='')}", timeout=timeout
+        )
+    except requests.exceptions.ConnectionError as e:
+        raise BackendDown(str(e)) from e
+    if r.status_code != 200:
+        raise BackendError(r.status_code, r.text[:300])
+    return r.json()
 
 
 def list_documents(base_url: str) -> list[dict]:

@@ -40,3 +40,12 @@ chroma/
 # 模型缓存（动辄几个 GB）
 .cache/
 models/
+
+# ---- ★ 与本项目无关的第三方软件源码（WindTerm 是独立的终端软件）----
+WindTerm-master/
+
+# ---- ★ 部署/运维临时脚本（本地一次性用，含服务器地址，不进版本库）----
+_ssh.py
+_deploy.py
+_copy_clean.py
+_qb_*
